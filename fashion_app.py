@@ -118,7 +118,8 @@ input[type="text"], .stTextInput input {
 }
 
 #MainMenu, footer { visibility: hidden; }
-.stAppDeployButton { display: none !important; }
+.stAppDeployButton, [data-testid="stAppDeployButton"],
+.stMainMenu, [data-testid="stToolbar"] { display: none !important; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: #080810; }
 ::-webkit-scrollbar-thumb { background: #d4af6b44; border-radius: 4px; }
