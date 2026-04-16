@@ -118,6 +118,7 @@ input[type="text"], .stTextInput input {
 }
 
 #MainMenu, footer { visibility: hidden; }
+.stAppDeployButton { display: none !important; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: #080810; }
 ::-webkit-scrollbar-thumb { background: #d4af6b44; border-radius: 4px; }
@@ -323,10 +324,7 @@ def setup_dataset():
     if not os.path.exists(f"{folder}/styles.csv"):
         st.warning("styles.csv not found (labels may be missing)")
 
-    # Log image count for debugging
-    img_dir = os.path.join(folder, "images")
-    img_count = len([f for f in os.listdir(img_dir) if f.endswith(('.jpg','.jpeg','.png'))])
-    st.sidebar.caption(f"📸 {img_count:,} images found on disk")
+
 
     return folder
 
@@ -442,11 +440,35 @@ def load_model():
 # ═════════════════════════════════════════════════════════════════════════════
 def browse_catalog_mode(rec, meta):
     st.markdown('<div class="section-title">Browse the Catalog</div><div class="section-rule"></div>', unsafe_allow_html=True)
-    c1,c2 = st.columns([3,1])
-    with c1: st.markdown(f'<p style="color:#6a6058;font-size:.8rem;letter-spacing:2px;text-transform:uppercase">{len(meta):,} items indexed</p>', unsafe_allow_html=True)
-    with c2: n = st.slider("Results", 3, 9, 6)
-    if 'sample' not in st.session_state or st.button("↺  Refresh"):
-        st.session_state.sample = meta.sample(min(10, len(meta)))
+
+    # ── Filter bar ────────────────────────────────────────────────────────────
+    fc1, fc2, fc3 = st.columns([2, 2, 1])
+    with fc1:
+        categories = ['All Categories'] + sorted(meta['masterCategory'].dropna().unique().tolist()) if 'masterCategory' in meta.columns else ['All Categories']
+        cat_filter = st.selectbox('Filter by Category', categories, index=0, label_visibility='collapsed')
+    with fc2:
+        if 'gender' in meta.columns:
+            genders = ['All Genders'] + sorted(meta['gender'].dropna().unique().tolist())
+            gender_filter = st.selectbox('Filter by Gender', genders, index=0, label_visibility='collapsed')
+        else:
+            gender_filter = 'All Genders'
+    with fc3:
+        n = st.slider('Results', 3, 9, 6)
+
+    # Apply filters
+    filtered = meta.copy()
+    if cat_filter != 'All Categories':
+        filtered = filtered[filtered['masterCategory'] == cat_filter]
+    if gender_filter != 'All Genders':
+        filtered = filtered[filtered['gender'] == gender_filter]
+
+    st.markdown(f'<p style="color:#6a6058;font-size:.75rem;letter-spacing:2px;text-transform:uppercase;margin:0">{len(filtered):,} items matching</p>', unsafe_allow_html=True)
+
+    # ── Sample grid ───────────────────────────────────────────────────────────
+    if 'sample' not in st.session_state or 'last_filter' not in st.session_state or st.session_state.last_filter != (cat_filter, gender_filter) or st.button('↺  Refresh'):
+        st.session_state.sample = filtered.sample(min(10, len(filtered))) if len(filtered) > 0 else filtered
+        st.session_state.last_filter = (cat_filter, gender_filter)
+
     cols = st.columns(5); sel = None
     for i,(_, item) in enumerate(st.session_state.sample.iterrows()):
         with cols[i%5]:
@@ -454,23 +476,27 @@ def browse_catalog_mode(rec, meta):
                 st.image(Image.open(item['image_path']), width='stretch')
                 name = item.get('productDisplayName', item['filename'])
                 st.caption(str(name)[:30] if pd.notna(name) else item['filename'][:25])
-                if st.button("Select", key=f"s{i}"): sel = item.name
+                if st.button('Find Similar', key=f's{i}'): sel = item.name
             except: pass
     if sel is not None:
         st.markdown('<hr style="border-color:#1e1c18;margin:2rem 0">', unsafe_allow_html=True)
-        q = meta.iloc[sel]
+        q = meta.loc[sel]
         c1,c2 = st.columns([1,2])
         with c1:
-            st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b;font-size:1rem">Query Item</p>', unsafe_allow_html=True)
+            st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b;font-size:1.1rem">Selected Item</p>', unsafe_allow_html=True)
             try: st.image(Image.open(q['image_path']), width='stretch')
             except: pass
+            # ── Product detail card ──────────────────────────────────────────
+            detail_html = '<div style="background:rgba(212,175,107,0.06);border:1px solid rgba(212,175,107,0.15);border-radius:6px;padding:1rem;margin-top:.8rem">'
             if 'productDisplayName' in q and pd.notna(q['productDisplayName']):
-                st.markdown(f'<p style="font-size:.8rem;color:#a89880">{q["productDisplayName"]}</p>', unsafe_allow_html=True)
-            for label in ['masterCategory','subCategory','articleType','baseColour','season']:
+                detail_html += f'<div style="font-size:.95rem;color:#d4af6b;font-weight:500;margin-bottom:8px">{q["productDisplayName"]}</div>'
+            for label, icon in [('masterCategory','🏷'), ('subCategory','📂'), ('articleType','👕'), ('baseColour','🎨'), ('season','☀️'), ('gender','👤'), ('usage','💼')]:
                 if label in q and pd.notna(q[label]):
-                    st.markdown(f'<span style="font-size:.7rem;color:#6a6058;text-transform:uppercase;letter-spacing:1px">{label}:</span> <span style="font-size:.8rem;color:#d4af6b">{q[label]}</span><br>', unsafe_allow_html=True)
+                    detail_html += f'<div style="font-size:.72rem;line-height:2;color:#8a7f72">{icon} <span style="color:#6a6058;text-transform:uppercase;letter-spacing:1px">{label}:</span> <span style="color:#d4af6b">{q[label]}</span></div>'
+            detail_html += '</div>'
+            st.markdown(detail_html, unsafe_allow_html=True)
         with c2:
-            st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b;font-size:1rem">Similar Items</p>', unsafe_allow_html=True)
+            st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b;font-size:1.1rem">Similar Items</p>', unsafe_allow_html=True)
             recs = rec.get_recommendations(sel, n)
             rc = st.columns(3)
             for i,(_, r) in enumerate(recs.iterrows()):
@@ -767,6 +793,21 @@ def main():
         upload_image_mode(recommender, extractor, metadata)
     else:
         analytics_dashboard(metadata, recommender, features)
+    # ── Footer ────────────────────────────────────────────────────────────────
+    st.markdown('<br><br>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align:center;padding:2rem 0 1rem 0;border-top:1px solid rgba(212,175,107,0.1);">
+        <p style="font-family:'Cormorant Garamond',serif;font-style:italic;color:#d4af6b;font-size:1.1rem;margin:0">
+            Fashion Intelligence
+        </p>
+        <p style="font-size:.7rem;color:#4a4540;margin:4px 0 0 0;letter-spacing:1.5px">
+            BUILT WITH RESNET-50 · MYNTRA DATASET · STREAMLIT
+        </p>
+        <p style="font-size:.65rem;color:#3a3530;margin:8px 0 0 0">
+            © 2026  Shirisha · All rights reserved
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
