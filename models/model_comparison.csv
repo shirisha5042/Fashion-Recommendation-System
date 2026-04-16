@@ -1,0 +1,4 @@
+Model,Feature Dim,Accuracy,Precision@6,Recall@6,F1-Score@6,Top-1 Similarity,Avg Top-5 Sim,Diversity (1-ILS),Catalog Coverage %
+ResNet18,512,0.759,0.762,0.762,0.762,0.924,0.906,0.111,6.4
+VGG16,4096,0.729,0.762,0.762,0.762,0.878,0.852,0.163,6.4
+ResNet50,2048,0.777,0.789,0.789,0.789,0.94,0.925,0.088,6.4

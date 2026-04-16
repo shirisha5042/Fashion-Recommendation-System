@@ -1,0 +1,744 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage{cite}
+
+% ─── IMAGES TO ADD (place these files in the same folder as this .tex) ────────
+%
+%  REQUIRED (paper will not compile without these):
+%  1. system_architecture_paper.png  — block diagram:
+%     [Images] → [Preprocessing] → [ResNet50] → [Features] → [KNN] → [Results]
+%
+%  2. Precision Recall F1.png — bar chart comparing Accuracy/F1 of 3 models
+%
+%  OPTIONAL (include if available from your Streamlit app screenshots):
+%  3. Master Category Distribution.png  — from Analytics Tab 1
+%  4. Confusion Matrix.png              — from Analytics Tab 2
+%  5. Free Space-PCA Projection.png     — from Analytics Tab 1
+%  6. tSNE_Visualization.png            — from models/tsne_visualization.png
+%  7. Top-K Similarity Distributions.png — from Analytics Tab 3
+%  8. Streamlit interface.png           — screenshot of Browse Catalog mode
+%  9. Streamlit interface1.png          — screenshot of Upload & Discover mode
+% ─────────────────────────────────────────────────────────────────────────────
+
+\title{Visual Fashion Recommendation Using Deep Feature Embeddings:\\
+A Three-Model Comparative Study with Interactive Analytics}
+
+\author{
+\IEEEauthorblockN{K. Teja,
+                  A. Shwetha,
+                  V. Shirisha,
+                  Ch. Amrutha,
+                  Dr. Shivadi Balakrishna}
+\IEEEauthorblockA{Department of Computer Science
+and Engineering (Advanced Computing)\\
+Vignan's Foundation for Science, Technology and Research,
+Andhra Pradesh, India\\
+\{teja, shwetha, shirisha, amrutha, balakrishna.shivadi\}@vignan.ac.in}
+}
+
+\begin{document}
+\maketitle
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{abstract}
+Keyword-based search fails to capture the visual nuances that drive
+fashion purchases --- a shopper looking for ``something like this blue
+kurta'' needs a system that reasons about shape, color, and texture,
+not just product tags. We tackle this gap by building a content-based
+visual recommendation pipeline on the Myntra catalog (44,441 product
+images across seven categories) and running a head-to-head comparison
+of three frozen ImageNet backbones under identical preprocessing,
+indexing, and evaluation conditions. ResNet18 yields 512-dimensional
+embeddings, VGG16 yields 4096-dimensional embeddings, and ResNet50
+yields 2048-dimensional embeddings; all vectors are L2-normalized so
+that a standard Ball Tree index can perform cosine-equivalent retrieval
+without a GPU at query time. To prevent the dominant Apparel class
+(48\% of the catalog) from inflating aggregate scores, we adopt a
+stratified evaluation protocol that draws queries equally from each of
+the seven master categories. On this balanced benchmark, ResNet50
+achieves the strongest retrieval quality (Accuracy 0.777, F1-Score@6
+0.789, Top-1 Cosine Similarity 0.940), while VGG16 produces the most
+diverse recommendation lists (Diversity 0.163) at the cost of lower
+precision. We wrap the full pipeline in a Streamlit web application
+that supports catalog browsing, image-upload search, and a three-tab
+analytics dashboard, demonstrating that the system is deployable with
+modest computational resources.
+\end{abstract}
+
+\begin{IEEEkeywords}
+fashion recommendation, content-based retrieval, ResNet50, VGG16,
+ResNet18, transfer learning, KNN, Myntra dataset, Streamlit
+\end{IEEEkeywords}
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+
+Indian fashion e-commerce platforms such as Myntra and Flipkart host
+catalogs spanning tens of thousands of products --- from ethnic kurtas
+to western sneakers, from personal care items to sporting goods. When a
+shopper spots a colleague wearing a particular style of printed kurti,
+typing ``blue printed kurti with mirror work'' into a search bar rarely
+surfaces the right results. The gap between visual intent and textual
+query is exactly where content-based image retrieval becomes useful
+\cite{mcauley2015image}.
+
+Traditional recommendation approaches rely on collaborative filtering
+or purchase-history signals, both of which ignore the visual dimension
+of fashion. Color palettes, silhouettes, fabric textures, and decorative
+patterns are the features that actually guide a purchase decision, yet
+none of these are easy to express as keywords. Deep convolutional
+networks trained on ImageNet have been shown to learn visual
+representations that transfer surprisingly well to downstream tasks,
+including fashion retrieval, without domain-specific fine-tuning
+\cite{yosinski2014transferable}.
+
+In this work we build a complete retrieval pipeline on the publicly
+available Myntra fashion dataset and conduct a controlled experiment
+comparing three backbone architectures. Concretely, we make the
+following contributions to the visual fashion recommendation
+literature:
+
+\begin{itemize}
+  \item A controlled three-way comparison of ResNet18, VGG16, and
+        ResNet50 under identical preprocessing, indexing, and evaluation
+        conditions on 44,441 fashion images, reporting classification
+        metrics, similarity scores, diversity, and catalog coverage.
+  \item A stratified evaluation protocol that draws an equal number of
+        queries from each of seven categories, ensuring that
+        minority-class performance (e.g., Sporting Goods with only 25
+        items) is not hidden behind the dominant Apparel class.
+  \item An interactive Streamlit application covering catalog browsing,
+        real-time image-upload search, and a three-tab analytics
+        dashboard that visualizes dataset statistics, classification
+        metrics, and recommendation quality indicators.
+\end{itemize}
+
+The remainder of this paper is organized as follows.
+Section~\ref{sec:related} reviews related work. Section~\ref{sec:method}
+describes the methodology. Section~\ref{sec:setup} covers the dataset
+and evaluation setup. Section~\ref{sec:results} presents results and
+discussion. Section~\ref{sec:app} describes the web application.
+Section~\ref{sec:conclusion} concludes with limitations and future
+directions.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Related Work}
+\label{sec:related}
+
+The trajectory from hand-crafted descriptors to deep features in visual
+retrieval follows a clear arc. Early systems relied on SIFT
+\cite{lowe2004distinctive} and HOG for local pattern matching, but
+these features struggle with the deformable geometry of draped fabric
+and the subtle color gradients of dyed textiles. The breakthrough came
+not from fashion-specific work but from the ImageNet classification
+challenge: Krizhevsky et al.\ \cite{krizhevsky2012imagenet} showed with
+AlexNet that learned hierarchical features outperform any hand-designed
+alternative at scale.
+
+Subsequent architecture advances pushed accuracy further. Simonyan and
+Zisserman \cite{simonyan2015vggnet} demonstrated that simply stacking
+$3{\times}3$ convolutions to greater depth (VGGNet, 16--19 layers)
+improves feature quality, while He et al.\ \cite{he2016resnet}
+introduced residual shortcuts that allow networks of 50+ layers to train
+without the vanishing-gradient problem. Both VGG16 and ResNet50 remain
+popular feature extractors in retrieval literature because their
+intermediate representations can be repurposed as fixed-length image
+embeddings with minimal effort.
+
+On the fashion side, the DeepFashion benchmark \cite{liu2016deepfashion}
+established that CNN embeddings support large-scale cross-domain
+retrieval across 50 clothing categories and 1000 attributes.
+Metric-learning approaches using triplet loss
+\cite{schroff2015facenet} can sharpen the embedding space further, but
+they require carefully curated positive/negative pairs and
+attribute-level labels that many real-world catalogs lack. For practical
+deployment scenarios --- ours included --- frozen ImageNet features
+provide a strong and zero-cost starting point that avoids the expense
+of supervised fine-tuning \cite{yosinski2014transferable}.
+
+Beyond accuracy, recommendation quality has multiple dimensions.
+Ziegler et al.\ \cite{ziegler2005diversification} argue that users
+prefer varied rather than repetitive recommendation lists, and propose
+intra-list diversity (ILD) as a complementary metric. Ge et al.\
+\cite{ge2010beyond} formalize catalog coverage --- the fraction of
+catalog items that ever appear in a recommendation --- as a measure of
+long-tail exposure. We adopt both metrics in our evaluation. For
+indexing, we use the Ball Tree data structure
+\cite{omohundro1989five}, which supports exact nearest-neighbor queries
+on L2-normalized vectors and avoids the complexity of approximate
+methods while remaining practical for catalogs of our scale ($\sim$44K
+items).
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Methodology}
+\label{sec:method}
+
+Fig.~\ref{fig:architecture} outlines the system pipeline, which has
+four stages: preprocessing, feature extraction, similarity indexing,
+and deployment through a web interface.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{system_architecture_paper.png}
+  \caption{System pipeline. Raw product images are resized and
+           normalized, passed through a frozen CNN backbone to produce
+           feature vectors, L2-normalized, indexed with a Ball Tree KNN
+           structure, and served through a Streamlit web application.}
+  \label{fig:architecture}
+\end{figure}
+
+\subsection{Image Preprocessing}
+
+Every catalog image is resized to $224 \times 224$ pixels using
+bilinear interpolation and channel-normalized with the ImageNet
+training-set statistics:
+\begin{equation}
+  \tilde{x}_c = \frac{x_c - \mu_c}{\sigma_c}, \quad c \in \{R, G, B\}
+  \label{eq:normalize_pixel}
+\end{equation}
+where $\mu = [0.485,\,0.456,\,0.406]$ and
+$\sigma = [0.229,\,0.224,\,0.225]$. No data augmentation is applied
+because we are extracting fixed descriptors, not training any layers.
+
+\subsection{Feature Extraction}
+
+We evaluate three ImageNet-pretrained backbones, all kept frozen
+(no gradient updates):
+
+\textbf{ResNet18} \cite{he2016resnet}: The lightest backbone in our
+comparison (11.7\,M parameters). We remove the final classification
+layer and read the global average pooling (GAP) output, yielding a
+512-dimensional embedding per image.
+
+\textbf{VGG16} \cite{simonyan2015vggnet}: The heaviest backbone
+(138\,M parameters). We tap the output of the first fully-connected
+layer (FC1 + ReLU), producing a 4096-dimensional embedding. Many of
+these dimensions encode spatial redundancies from the three FC layers,
+which, as we show in Section~\ref{sec:results}, hurts retrieval
+relative to the more compact ResNet representations.
+
+\textbf{ResNet50} \cite{he2016resnet}: A mid-range backbone (25.6\,M
+parameters) that reads the 2048-dimensional GAP output. Residual
+connections allow it to build richer, more hierarchical feature
+representations than ResNet18 while remaining far more parameter
+efficient than VGG16.
+
+All three models process images in batches of 64 on a single NVIDIA
+T4 GPU (Google Colab). For the ResNet variants, the backbone output
+has shape $(B, D, 1, 1)$ and is reshaped to $(B, D)$:
+\begin{equation}
+  \mathbf{f} = \text{reshape}\!\left(\text{GAP}(\mathbf{z}),\;[B, D]\right)
+  \label{eq:reshape}
+\end{equation}
+where $D \in \{512, 2048\}$.
+
+\subsection{L2 Normalization and Cosine-Equivalent Retrieval}
+
+After extraction, every feature vector is projected onto the unit
+hypersphere:
+\begin{equation}
+  \hat{\mathbf{f}} = \frac{\mathbf{f}}{\|\mathbf{f}\|_2}
+  \label{eq:l2norm}
+\end{equation}
+This step is critical because it establishes an algebraic equivalence
+between Euclidean distance and cosine similarity. For any two unit
+vectors $\hat{\mathbf{f}}_a$ and $\hat{\mathbf{f}}_b$:
+\begin{equation}
+  \cos(\hat{\mathbf{f}}_a, \hat{\mathbf{f}}_b)
+  = 1 - \frac{\|\hat{\mathbf{f}}_a - \hat{\mathbf{f}}_b\|_2^2}{2}
+  \label{eq:cosine_equiv}
+\end{equation}
+Equation~\eqref{eq:cosine_equiv} lets us use a Ball Tree index
+\cite{omohundro1989five} --- which natively supports Euclidean queries
+--- to perform cosine-equivalent retrieval without materializing a full
+$N \times N$ similarity matrix. We store all features as
+\texttt{float32} arrays via \texttt{joblib} serialization, halving
+memory relative to the default \texttt{float64}.
+
+\subsection{Ball Tree KNN Index}
+
+Given a query vector $\hat{\mathbf{q}}$, the top-$K$ nearest neighbors
+are retrieved as:
+\begin{equation}
+  \mathcal{N}_K(\hat{\mathbf{q}})
+  = \operatorname*{arg\,min}_{K}\;
+    \|\hat{\mathbf{q}} - \hat{\mathbf{f}}_i\|_2, \quad i = 1,\ldots,N
+  \label{eq:knn}
+\end{equation}
+The cosine similarity for each neighbor is then recovered from
+Eq.~\eqref{eq:cosine_equiv}. We set $K{=}6$ throughout, following
+standard practice in top-$K$ recommendation evaluation.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Dataset and Experimental Setup}
+\label{sec:setup}
+
+\subsection{Dataset}
+
+The Myntra fashion dataset is a publicly available collection of Indian
+e-commerce product images accompanied by structured metadata in a CSV
+file (\texttt{styles.csv}). Each record contains fields for gender,
+master category, sub-category, article type, base colour, season, year,
+and product display name. Table~\ref{tab:dataset} summarizes the key
+properties.
+
+\begin{table}[!t]
+\caption{Myntra Dataset Statistics}
+\label{tab:dataset}
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Property}  & \textbf{Value}      & \textbf{Details} \\
+\midrule
+Total images       & 44,441              & All loaded successfully \\
+Feature dim (R18)  & 512-D               & ResNet18 GAP output \\
+Feature dim (VGG16)& 4096-D              & VGG16 FC1 output \\
+Feature dim (R50)  & 2048-D              & ResNet50 GAP output \\
+Master categories  & 7                   & Apparel, Accessories, etc. \\
+Article types      & 142                 & Unique product types \\
+Base colours       & 46                  & From \texttt{styles.csv} \\
+Batch size         & 64                  & Feature extraction \\
+Input resolution   & $224{\times}224$    & All backbones \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The seven master categories are heavily imbalanced: Apparel (21,392),
+Accessories (11,274), Footwear (9,219), Personal Care (2,403), Free
+Items (105), Sporting Goods (25), and Home (1). Apparel alone accounts
+for 48\% of the catalog, which would dominate any uniformly random
+evaluation sample. The color distribution is led by Black and Navy
+Blue, and the gender split skews heavily toward Men's products.
+Fig.~\ref{fig:cat_dist} visualizes the category breakdown.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Master Category Distribution.png}
+  \caption{Master category distribution in the Myntra dataset. The
+           dominance of Apparel (48\%) motivates our stratified
+           evaluation protocol.}
+  \label{fig:cat_dist}
+\end{figure}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Confusion Matrix.png}
+  \caption{Confusion matrix for ResNet50 on the stratified 166-query
+           benchmark. Diagonal entries confirm that the majority of
+           retrieved neighbors share the query's master category.}
+  \label{fig:confusion}
+\end{figure}
+
+\subsection{Evaluation Protocol}
+
+Sampling queries uniformly at random would allocate roughly half of
+them to Apparel, making it impossible to assess whether the system
+handles minority classes like Sporting Goods or Home. Instead, we use
+stratified sampling: $\lfloor 200/7 \rfloor \approx 28$ queries are
+drawn from each master category, yielding 166 balanced queries across
+the seven classes.
+
+For each query, the top-$K{=}6$ neighbors are retrieved (excluding the
+query itself if it appears in the index). The predicted label is
+determined by majority vote among the categories of the six returned
+items. We compute four classification metrics against the ground-truth
+labels from \texttt{styles.csv}:
+
+\begin{itemize}
+  \item \textbf{Accuracy}: fraction of queries where the majority-vote
+        label matches the query's true category.
+  \item \textbf{Precision@6}: fraction of retrieved items that share
+        the query's category, averaged across all queries.
+  \item \textbf{Recall@6}: fraction of same-category catalog items
+        retrieved, averaged and capped at $K$.
+  \item \textbf{F1-Score@6}: harmonic mean of Precision@6 and Recall@6.
+\end{itemize}
+
+We also measure retrieval coherence via Top-1 and average Top-5 cosine
+similarity; intra-list diversity
+$\text{DIV} = 1 - \text{ILS}$ where ILS is the mean pairwise cosine
+similarity within each recommendation list
+\cite{ziegler2005diversification}; and catalog coverage, defined as the
+fraction of distinct catalog items that appear in any recommendation
+across 500 random queries \cite{ge2010beyond}.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Backbone Comparison}
+
+Table~\ref{tab:comparison} reports all metrics for the three backbones
+on the stratified 166-query benchmark.
+
+\begin{table}[!t]
+\caption{Backbone Comparison --- Myntra Dataset\\
+(166 stratified queries, $K{=}6$, frozen ImageNet weights)}
+\label{tab:comparison}
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Acc} & \textbf{P@6} & \textbf{R@6} &
+\textbf{F1@6} & \textbf{Top-1} \\
+\midrule
+ResNet18 (512-D)   & 0.759 & 0.762 & 0.762 & 0.762 & 0.924 \\
+VGG16 (4096-D)     & 0.729 & 0.762 & 0.762 & 0.762 & 0.878 \\
+\textbf{ResNet50 (2048-D)} &
+\textbf{0.777} & \textbf{0.789} & \textbf{0.789} &
+\textbf{0.789} & \textbf{0.940} \\
+\midrule
+\textbf{Model} & \multicolumn{2}{c}{\textbf{Avg Top-5}} &
+\multicolumn{2}{c}{\textbf{Diversity}} & \textbf{Params} \\
+\midrule
+ResNet18   & \multicolumn{2}{c}{0.906} & \multicolumn{2}{c}{0.111} & 11.7M \\
+VGG16      & \multicolumn{2}{c}{0.852} & \multicolumn{2}{c}{\textbf{0.163}} & 138M \\
+\textbf{ResNet50} & \multicolumn{2}{c}{\textbf{0.925}} &
+\multicolumn{2}{c}{0.088} & 25.6M \\
+\bottomrule
+\multicolumn{6}{l}{\small Bold = best in column. Catalog coverage = 6.4\% for all three models.}
+\end{tabular}
+\end{table}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Precision Recall F1.png}
+  \caption{Accuracy and F1-Score@6 across the three backbones. ResNet50
+           leads on both metrics despite having only 25.6\,M parameters
+           --- roughly a fifth of VGG16's 138\,M.}
+  \label{fig:comparison}
+\end{figure}
+
+ResNet50 wins every classification and similarity column. Its Accuracy
+of 0.777 and F1@6 of 0.789 are reached without any fashion-specific
+training whatsoever, confirming that residual features learned on
+ImageNet transfer effectively to fashion product images. The gain over
+ResNet18 is modest (+1.8 pp accuracy, +2.7 pp F1), suggesting that
+doubling the embedding dimension from 512 to 2048 provides a measurable
+but not dramatic improvement.
+
+VGG16 presents a more interesting case. Despite commanding 138\,M
+parameters --- roughly 12 times ResNet18 and over five times
+ResNet50 --- it trails both ResNets on accuracy and ties ResNet18 on
+F1@6. We attribute this to the nature of VGG16's 4096-D
+representation: the three fully-connected layers at the end of the
+network encode substantial spatial redundancy that helps ImageNet
+classification but actively hurts retrieval, where compact,
+discriminative embeddings are preferred. ResNet50's 2048-D features,
+shaped by residual connections that preserve gradient flow across 50
+layers, capture category-level semantics more efficiently than VGG16
+manages with six times the parameter budget.
+
+Interestingly, VGG16 does produce the most diverse recommendation lists
+(Diversity 0.163 vs.\ 0.088 for ResNet50). The lower feature precision
+of VGG16 means that its nearest-neighbor sets span a wider visual range
+--- the system recommends a broader variety of items rather than six near
+duplicates. Whether this trade-off is desirable depends on the UX
+context: a ``more like this'' widget benefits from tight similarity
+(ResNet50), while an ``explore this style'' carousel might prefer the
+variety that VGG16 provides.
+
+All three models produce the same catalog coverage (6.4\%), indicating
+that each model retrieves from a small, stable set of near-neighbors
+and rarely surfaces long-tail items. Improving coverage through
+query-time diversification or approximate indexing with randomized
+tie-breaking is a direction for future investigation.
+
+\subsection{Feature Space Analysis}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Free Space-PCA Projection.png}
+  \caption{PCA projection of ResNet50 embeddings (1,000 items, colored
+           by master category). Footwear and Accessories form tight
+           clusters; Apparel spans a wider region.}
+  \label{fig:pca}
+\end{figure}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{tSNE_Visualization.png}
+  \caption{t-SNE projection of ResNet50 embeddings (2,000 items).
+           Tighter, more separated clusters than PCA confirm strong
+           local neighborhood structure organized by category.}
+  \label{fig:tsne}
+\end{figure}
+
+PCA and t-SNE \cite{vandermaaten2008tsne} projections of the ResNet50
+feature space (Figs.~\ref{fig:pca} and \ref{fig:tsne}) both reveal
+cluster structure aligned with product categories. Footwear and
+Accessories form compact, well-separated groups --- unsurprisingly,
+since shoes and watches have distinctive shapes (sole profiles, dial
+faces) that ImageNet features capture well. Apparel occupies a broader
+region of the embedding space, reflecting the high visual diversity
+within that category: tops, bottoms, dresses, and ethnic wear all
+carry the same ``Apparel'' label yet look nothing alike. This
+observation partly explains why Apparel queries are more likely to
+produce cross-category errors in the confusion matrix
+(Fig.~\ref{fig:confusion}).
+
+\subsection{Similarity and Retrieval Quality}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Top-K Similarity Distributions.png}
+  \caption{Distribution of Top-1, Avg Top-3, and Avg Top-5 cosine
+           similarity for ResNet50. The mass of the Top-1 distribution
+           above 0.9 confirms that the nearest neighbor is almost
+           always a strong visual match.}
+  \label{fig:topk}
+\end{figure}
+
+ResNet50's Top-1 cosine similarity of 0.940 (Fig.~\ref{fig:topk})
+means that, for the typical query, the closest item in the catalog
+shares over 94\% of its visual signature. The average Top-5 similarity
+of 0.925 shows only a gentle decline across the recommendation list,
+confirming that all six returned items maintain strong visual coherence
+with the query.
+
+The intra-list diversity of 0.088 for ResNet50 tells the same story
+from the opposite direction: the six recommendations are highly
+similar to each other, differing by less than 9\% on average.
+For a ``find similar items'' use case, this tight clustering is
+exactly the desired behavior.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Web Application}
+\label{sec:app}
+
+The system is deployed as a Streamlit \cite{streamlit2024} application
+with three navigation modes, selectable from a sidebar. The interface
+follows a dark-theme aesthetic with gold accent colors, drawing on
+visual conventions from luxury fashion branding. Custom CSS injected
+via Streamlit's \texttt{unsafe\_allow\_html} parameter controls
+typography (Cormorant Garamond for headings, Outfit for body text),
+card layouts with animated gold borders for KPI metrics, and smooth
+micro-animations on hover states. This level of visual polish
+demonstrates that a research prototype can be wrapped in a
+near-production-quality interface with relatively little additional
+effort.
+
+\textbf{Browse Catalog} (Fig.~\ref{fig:ui_browse}) presents a grid of
+randomly sampled product images. Clicking any item triggers a KNN query
+and displays the top-6 visual matches alongside similarity scores,
+product names, and category labels. Similarity scores are color-coded
+(green above 85\%, gold above 70\%, red below) to give an immediate
+visual quality signal.
+
+\textbf{Upload \& Discover} (Fig.~\ref{fig:ui_upload}) accepts a
+user-uploaded image, runs it through the selected backbone's
+preprocessing and forward pass in real time, and retrieves catalog
+matches. This mode enables a ``shop from a photo'' workflow: a user
+can photograph an item they like and instantly see similar products
+from the Myntra catalog.
+
+\textbf{Analytics Dashboard} provides three tabs: (i)~Dataset \& EDA
+--- category, colour, gender, season, and year distributions, plus
+PCA and t-SNE projections of the feature space; (ii)~Classification
+Metrics --- accuracy, precision, recall, F1, per-category bar charts,
+confusion matrix, and a full classification report; (iii)~Recommendation
+Metrics --- Top-K similarity histograms, a diversity gauge, a catalog
+coverage curve, and a system scorecard.
+
+The application supports real-time model switching: the sidebar exposes
+a radio button for ResNet18, VGG16, or ResNet50. Selecting a model
+loads the corresponding precomputed feature matrix and KNN index from
+a serialized \texttt{.pkl} file (generated offline via \texttt{joblib}).
+This design avoids recomputing features at query time, keeping response
+latency under one second for catalog browsing. For uploaded images, a
+single forward pass through the selected backbone adds roughly two
+seconds of latency on a CPU-only machine.
+
+The full pipeline is built with PyTorch \cite{paszke2019pytorch} for
+feature extraction and scikit-learn \cite{pedregosa2011sklearn} for KNN
+indexing and metric computation. The application requires no GPU at
+inference time, making it deployable on commodity hardware.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Streamlit interface.png}
+  \caption{Browse Catalog mode. The selected query item appears on the
+           left; its six nearest visual matches with similarity scores
+           are displayed on the right.}
+  \label{fig:ui_browse}
+\end{figure}
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{Streamlit interface1.png}
+  \caption{Upload \& Discover mode. A user-uploaded product image
+           retrieves visually similar catalog items in real time.}
+  \label{fig:ui_upload}
+\end{figure}
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+\subsection{Summary}
+
+We compared three frozen ImageNet backbones --- ResNet18, VGG16, and
+ResNet50 --- for content-based fashion retrieval on 44,441 Myntra
+product images. Using a stratified evaluation protocol that samples
+equally from seven product categories, we found that ResNet50 achieves
+the best results across all classification and similarity metrics
+(Accuracy 0.777, F1-Score@6 0.789, Top-1 Similarity 0.940) without
+any domain-specific fine-tuning. VGG16, despite its 138\,M parameters,
+underperforms both ResNets on retrieval accuracy but produces the
+most diverse recommendation lists (Diversity 0.163). ResNet18 offers
+a reasonable accuracy--efficiency trade-off for resource-constrained
+deployments.
+
+The accompanying Streamlit application integrates visual recommendation,
+image-upload search, and a multi-tab analytics dashboard into a single
+deployable system that runs without a GPU at inference time.
+
+\subsection{Limitations}
+
+Several limitations of our study deserve explicit mention. First, the
+Myntra catalog has extreme category imbalance: Home contains exactly
+one item and Sporting Goods contains only 25. Although our stratified
+protocol assigns equal queries to each category, the Ball Tree index
+still draws neighbors from these tiny pools, so minority-category
+retrieval effectively reduces to near-exhaustive search rather than
+efficient approximate lookup.
+
+Second, all three backbones are frozen at ImageNet weights. While this
+zero-shot approach works well for coarse category-level retrieval, it
+cannot capture fashion-specific attributes such as neckline shape,
+sleeve length, or fabric texture --- attributes that matter for
+fine-grained ``more like this'' recommendations. Fine-tuning on a
+fashion-attribute dataset would likely close this gap but requires
+labeled training data that the Myntra CSV does not supply.
+
+Third, the evaluation is based entirely on category-level ground truth.
+A recommendation that returns a red cotton kurta when the query is a
+blue silk kurta counts as correct if both are labeled Apparel, even
+though a real shopper would consider them very different. Attribute-level
+evaluation would give a more nuanced picture of retrieval quality.
+
+Finally, the Ball Tree index does not scale gracefully beyond
+$\sim$100K items. Production systems typically use approximate
+nearest-neighbor libraries such as FAISS \cite{johnson2019faiss} or
+ScaNN, which trade a small amount of recall for orders-of-magnitude
+speedup. Our exact-search setup is appropriate for a 44,441-item
+catalog but would need replacement for million-scale deployment.
+
+\subsection{Future Work}
+
+Three extensions follow naturally from the limitations above:
+(i)~fine-tuning the backbone on fashion-specific attributes using
+metric learning with triplet or contrastive loss;
+(ii)~replacing the Ball Tree with an approximate nearest-neighbor
+index (e.g., FAISS) to support catalogs at million-item scale;
+(iii)~combining visual features with textual product descriptions
+(product display name, article type, colour) for multimodal
+recommendation.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{thebibliography}{17}
+
+\bibitem{he2016resnet}
+K.~He, X.~Zhang, S.~Ren, and J.~Sun,
+``Deep residual learning for image recognition,''
+in \emph{Proc. IEEE CVPR}, 2016, pp. 770--778.
+
+\bibitem{simonyan2015vggnet}
+K.~Simonyan and A.~Zisserman,
+``Very deep convolutional networks for large-scale image recognition,''
+in \emph{Proc. ICLR}, 2015.
+
+\bibitem{krizhevsky2012imagenet}
+A.~Krizhevsky, I.~Sutskever, and G.~E.~Hinton,
+``ImageNet classification with deep convolutional neural networks,''
+in \emph{Adv. Neural Inf. Process. Syst.}, vol.~25, 2012, pp. 1097--1105.
+
+\bibitem{liu2016deepfashion}
+Z.~Liu, P.~Luo, S.~Qiu, X.~Wang, and X.~Tang,
+``DeepFashion: Powering robust clothes recognition and retrieval with
+rich annotations,''
+in \emph{Proc. IEEE CVPR}, 2016, pp. 1096--1104.
+
+\bibitem{yosinski2014transferable}
+J.~Yosinski, J.~Clune, Y.~Bengio, and H.~Lipson,
+``How transferable are features in deep neural networks?''
+in \emph{Adv. Neural Inf. Process. Syst.}, vol.~27, 2014, pp. 3320--3328.
+
+\bibitem{mcauley2015image}
+J.~McAuley, C.~Targett, Q.~Shi, and A.~van den Hengel,
+``Image-based recommendations on styles and substitutes,''
+in \emph{Proc. 38th ACM SIGIR}, 2015, pp. 43--52.
+
+\bibitem{lops2011content}
+P.~Lops, M.~de~Gemmis, and G.~Semeraro,
+``Content-based recommender systems: State of the art and trends,''
+in \emph{Recommender Systems Handbook}. Springer, 2011, pp. 73--105.
+
+\bibitem{schroff2015facenet}
+F.~Schroff, D.~Kalenichenko, and J.~Philbin,
+``FaceNet: A unified embedding for face recognition and clustering,''
+in \emph{Proc. IEEE CVPR}, 2015, pp. 815--823.
+
+\bibitem{ziegler2005diversification}
+C.-N.~Ziegler, S.~M.~McNee, J.~A.~Konstan, and G.~Lausen,
+``Improving recommendation lists through topic diversification,''
+in \emph{Proc. 14th WWW}, 2005, pp. 22--32.
+
+\bibitem{ge2010beyond}
+M.~Ge, C.~Delgado-Battenfeld, and D.~Jannach,
+``Beyond accuracy: Evaluating recommender systems by coverage and
+serendipity,''
+in \emph{Proc. 4th ACM RecSys}, 2010, pp. 257--260.
+
+\bibitem{lowe2004distinctive}
+D.~G.~Lowe,
+``Distinctive image features from scale-invariant keypoints,''
+\emph{Int. J. Comput. Vis.}, vol. 60, no. 2, pp. 91--110, 2004.
+
+\bibitem{omohundro1989five}
+S.~M.~Omohundro,
+``Five balltree construction algorithms,''
+\emph{Int. Comput. Sci. Inst. Tech. Rep.}, 1989.
+
+\bibitem{vandermaaten2008tsne}
+L.~van der Maaten and G.~Hinton,
+``Visualizing data using t-SNE,''
+\emph{J. Mach. Learn. Res.}, vol.~9, pp. 2579--2605, 2008.
+
+\bibitem{paszke2019pytorch}
+A.~Paszke \emph{et al.},
+``PyTorch: An imperative style, high-performance deep learning library,''
+in \emph{Adv. Neural Inf. Process. Syst.}, vol.~32, 2019, pp. 8026--8037.
+
+\bibitem{pedregosa2011sklearn}
+F.~Pedregosa \emph{et al.},
+``Scikit-learn: Machine learning in Python,''
+\emph{J. Mach. Learn. Res.}, vol.~12, pp. 2825--2830, 2011.
+
+\bibitem{johnson2019faiss}
+J.~Johnson, M.~Douze, and H.~J\'{e}gou,
+``Billion-scale similarity search with GPUs,''
+\emph{IEEE Trans. Big Data}, vol.~7, no.~3, pp. 535--547, 2021.
+
+\bibitem{streamlit2024}
+Streamlit Inc.,
+``Streamlit --- A faster way to build and share data apps,''
+\url{https://streamlit.io}, 2024.
+
+\end{thebibliography}
+
+\end{document}
