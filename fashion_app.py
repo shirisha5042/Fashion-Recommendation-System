@@ -435,13 +435,14 @@ def load_model(model_name: str = 'ResNet-50 (Recommended)'):
             .str.replace(r'^.*/myntradataset/', 'myntradataset/', regex=True)
         )
 
-    # ── Merge styles.csv for real labels ──────────────────────────────────────
-    styles_path = 'myntradataset/styles.csv'
-    if os.path.exists(styles_path):
-        styles = pd.read_csv(styles_path, on_bad_lines='skip')
-        styles['id'] = styles['id'].astype(str)
-        metadata['image_id'] = metadata['image_id'].astype(str)
-        metadata = metadata.merge(styles, left_on='image_id', right_on='id', how='left')
+    # ── Merge styles.csv for real labels (only if not already in pkl) ───────────
+    if 'productDisplayName' not in metadata.columns:
+        styles_path = 'myntradataset/styles.csv'
+        if os.path.exists(styles_path):
+            styles = pd.read_csv(styles_path, on_bad_lines='skip')
+            styles['id'] = styles['id'].astype(str)
+            metadata['image_id'] = metadata['image_id'].astype(str)
+            metadata = metadata.merge(styles, left_on='image_id', right_on='id', how='left')
 
     extractor_type = cfg['extractor']
     return FashionRecommender(features, metadata), FeatureExtractor(extractor_type), metadata, features
