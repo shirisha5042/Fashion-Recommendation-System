@@ -24,12 +24,9 @@ st.set_page_config(
 )
 
 # ─── Google Drive file IDs for cloud deployment ───────────────────────────────
-# Replace these with your actual Google Drive file IDs after uploading
 GDRIVE_FILES = {
-    'resnet18_pkl':  os.environ.get('GDRIVE_RESNET18_ID', ''),   # fashion_recommender_resnet18.pkl
-    'resnet50_pkl':  os.environ.get('GDRIVE_RESNET50_ID', ''),   # fashion_recommender_resnet50.pkl
-    'vgg16_pkl':     os.environ.get('GDRIVE_VGG16_ID', ''),      # fashion_recommender_vgg16.pkl
-    'dataset_zip':   os.environ.get('GDRIVE_DATASET_ID', ''),    # myntradataset.zip (images + styles.csv)
+    'resnet50_pkl':  os.environ.get('GDRIVE_RESNET50_ID', ''),
+    'dataset_zip':   os.environ.get('GDRIVE_DATASET_ID', ''),
 }
 
 @st.cache_resource
@@ -378,41 +375,20 @@ class FashionRecommender:
         return rec
 
 # ─── Model config ─────────────────────────────────────────────────────────────
-MODEL_OPTIONS = {
-    'ResNet-50 (Recommended)': {
-        'pkl':        'models/fashion_recommender_resnet50.pkl',
-        'extractor':  'resnet50',
-        'feat_dim':   '2048-D',
-        'gdrive_key': 'resnet50_pkl',
-        'desc':       'Best balance of accuracy & speed',
-        'size':       '~354 MB',
-    },
-    'ResNet-18 (Lightweight)': {
-        'pkl':        'models/fashion_recommender_resnet18.pkl',
-        'extractor':  'resnet18',
-        'feat_dim':   '512-D',
-        'gdrive_key': 'resnet18_pkl',
-        'desc':       'Fastest inference, lower memory',
-        'size':       '~93 MB',
-    },
-    'VGG-16 (High Fidelity)': {
-        'pkl':        'models/fashion_recommender_vgg16.pkl',
-        'extractor':  'vgg16',
-        'feat_dim':   '4096-D',
-        'gdrive_key': 'vgg16_pkl',
-        'desc':       'Highest feature depth, most memory',
-        'size':       '~701 MB',
-    },
+MODEL_CONFIG = {
+    'pkl':        'models/fashion_recommender_resnet50.pkl',
+    'extractor':  'resnet50',
+    'feat_dim':   '2048-D',
+    'gdrive_key': 'resnet50_pkl',
 }
 
 # ─── Load model + merge styles.csv ────────────────────────────────────────────
-# NOTE: Not cached with @st.cache_resource to allow model switching without OOM
-#       on Streamlit Cloud free tier (1GB RAM). Only one model stays in memory.
-def load_model(model_name: str = 'ResNet-50 (Recommended)'):
+@st.cache_resource
+def load_model():
     import gc
     gc.collect()  # Free memory from previous model
 
-    cfg      = MODEL_OPTIONS[model_name]
+    cfg      = MODEL_CONFIG
     pkl_path = cfg['pkl']
 
     # Try downloading from Google Drive if model file doesn't exist
@@ -421,14 +397,14 @@ def load_model(model_name: str = 'ResNet-50 (Recommended)'):
         gdrive_key = cfg.get('gdrive_key', '')
         file_id = GDRIVE_FILES.get(gdrive_key, '')
         if file_id:
-            with st.spinner(f'Downloading {model_name}... (first time only)'):
+            with st.spinner('Downloading ResNet-50 model... (first time only)'):
                 download_from_gdrive(file_id, pkl_path)
         if not os.path.exists(pkl_path):
-            st.error(f"Model file not found: {pkl_path}\nPlease set the correct Google Drive secret.")
+            st.error(f"Model file not found: {pkl_path}\nPlease set the GDRIVE_RESNET50_ID secret.")
             st.stop()
 
     try:
-        with st.spinner(f'Loading {model_name}...'):
+        with st.spinner('Loading ResNet-50 model...'):
             data     = joblib.load(pkl_path)
             features = data['features']
             metadata = data['metadata']
@@ -457,8 +433,8 @@ def load_model(model_name: str = 'ResNet-50 (Recommended)'):
             extractor_type = cfg['extractor']
             return FashionRecommender(features, metadata), FeatureExtractor(extractor_type), metadata, features
     except Exception as e:
-        st.error(f"Failed to load {model_name}: {str(e)}")
-        st.info("This model may be too large for the free tier, or the file may be corrupted. Try a different model.")
+        st.error(f"Failed to load model: {str(e)}")
+        st.info("The model file may be corrupted. Try rebooting the app.")
         st.stop()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -739,14 +715,14 @@ def analytics_dashboard(meta, rec, features):
                             cmap=GOLD_CMAP, alpha=.35, s=4, linewidths=0, zorder=2)
             plt.colorbar(sc, ax=ax)
         var = pca.explained_variance_ratio_
-        style_ax(ax, f'ResNet18 Embeddings — PC1 {var[0]:.1%}  ·  PC2 {var[1]:.1%}  ·  {ps:,} items',
+        style_ax(ax, f'ResNet-50 Embeddings — PC1 {var[0]:.1%}  ·  PC2 {var[1]:.1%}  ·  {ps:,} items',
                  'Principal Component 1', 'Principal Component 2')
         fig.tight_layout(); st.pyplot(fig, width='stretch'); plt.close()
 
         st.markdown(f"""<div class="insight">
         Each color represents a <b>master category</b>. Visible clustering confirms the model
         learned visually coherent style representations — items of the same category group together
-        in the 512-D embedding space.
+        in the 2048-D embedding space.
         </div>""", unsafe_allow_html=True)
 # ═════════════════════════════════════════════════════════════════════════════
 #   MAIN
@@ -771,45 +747,17 @@ def main():
                             label_visibility="collapsed")
     st.sidebar.markdown('<hr style="border-color:#1e1c18;margin:1.5rem 0">', unsafe_allow_html=True)
 
-    # ── Model selector dropdown (default = ResNet-50) ─────────────────────────
-    st.sidebar.markdown("""
-    <div style="font-size:.65rem;color:#6a6058;letter-spacing:2px;text-transform:uppercase;
-                margin-bottom:.4rem;">⚙ Select Model</div>
-    """, unsafe_allow_html=True)
-    model_names = list(MODEL_OPTIONS.keys())
-    model_choice = st.sidebar.selectbox(
-        "Choose a backbone model",
-        model_names,
-        index=0,   # ResNet-50 (Recommended) is first / default
-        help="Select the deep learning model for feature extraction. ResNet-50 offers the best accuracy-speed trade-off.",
-    )
-
-    # Show selected model info card
-    cfg = MODEL_OPTIONS[model_choice]
-    st.sidebar.markdown(f"""
-    <div style="background:rgba(212,175,107,0.06); border:1px solid rgba(212,175,107,0.15);
-                border-radius:4px; padding:0.8rem 1rem; margin:0.6rem 0 0.3rem 0;">
-        <div style="font-size:.72rem;color:#d4af6b;font-weight:500;margin-bottom:4px;">
-            {model_choice.split(' (')[0]}</div>
-        <div style="font-size:.68rem;color:#8a7f72;line-height:1.7;">
-            {cfg['desc']}<br>
-            Features: <span style="color:#d4af6b">{cfg['feat_dim']}</span> · 
-            Size: <span style="color:#d4af6b">{cfg['size']}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    recommender, extractor, metadata, features = load_model(model_choice)
+    # ── Load ResNet-50 model ───────────────────────────────────────────────────
+    recommender, extractor, metadata, features = load_model()
 
     st.sidebar.markdown('<hr style="border-color:#1e1c18;margin:1.5rem 0">', unsafe_allow_html=True)
     has_labels = 'masterCategory' in metadata.columns
-    backbone_name = model_choice.split(' (')[0]
     st.sidebar.markdown(f"""
     <div style="font-size:.7rem;color:#3a3530;letter-spacing:1px;line-height:2.2">
     DATASET &nbsp;·&nbsp; Myntra<br>
-    BACKBONE &nbsp;·&nbsp; {backbone_name}<br>
+    BACKBONE &nbsp;·&nbsp; ResNet-50<br>
     ITEMS &nbsp;·&nbsp; {len(metadata):,}<br>
-    FEATURES &nbsp;·&nbsp; {cfg['feat_dim']}<br>
+    FEATURES &nbsp;·&nbsp; 2048-D<br>
     LABELS &nbsp;·&nbsp; {'Real ✦' if has_labels else 'KMeans'}
     </div>""", unsafe_allow_html=True)
 
