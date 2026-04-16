@@ -120,7 +120,7 @@ input[type="text"], .stTextInput input {
     border-radius: 4px !important;
 }
 
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer { visibility: hidden; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: #080810; }
 ::-webkit-scrollbar-thumb { background: #d4af6b44; border-radius: 4px; }
