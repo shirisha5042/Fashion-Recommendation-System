@@ -28,6 +28,7 @@ st.set_page_config(
 GDRIVE_FILES = {
     'resnet18_pkl':  os.environ.get('GDRIVE_RESNET18_ID', ''),   # fashion_recommender_resnet18.pkl
     'resnet50_pkl':  os.environ.get('GDRIVE_RESNET50_ID', ''),   # fashion_recommender_resnet50.pkl
+    'vgg16_pkl':     os.environ.get('GDRIVE_VGG16_ID', ''),      # fashion_recommender_vgg16.pkl
     'dataset_zip':   os.environ.get('GDRIVE_DATASET_ID', ''),    # myntradataset.zip (images + styles.csv)
 }
 
@@ -362,29 +363,35 @@ class FashionRecommender:
 
 # ─── Model config ─────────────────────────────────────────────────────────────
 MODEL_OPTIONS = {
-    'ResNet50 (default)': {
-        'pkl':       'models/fashion_recommender_resnet50.pkl',
-        'extractor': 'resnet50',
-        'feat_dim':  '2048-D',
+    'ResNet-50 (Recommended)': {
+        'pkl':        'models/fashion_recommender_resnet50.pkl',
+        'extractor':  'resnet50',
+        'feat_dim':   '2048-D',
         'gdrive_key': 'resnet50_pkl',
+        'desc':       'Best balance of accuracy & speed',
+        'size':       '~354 MB',
     },
-    'ResNet18': {
-        'pkl':       'models/fashion_recommender_resnet18.pkl',
-        'extractor': 'resnet18',
-        'feat_dim':  '512-D',
+    'ResNet-18 (Lightweight)': {
+        'pkl':        'models/fashion_recommender_resnet18.pkl',
+        'extractor':  'resnet18',
+        'feat_dim':   '512-D',
         'gdrive_key': 'resnet18_pkl',
+        'desc':       'Fastest inference, lower memory',
+        'size':       '~93 MB',
     },
-    'VGG16': {
-        'pkl':       'models/fashion_recommender_vgg16.pkl',
-        'extractor': 'vgg16',
-        'feat_dim':  '4096-D',
+    'VGG-16 (High Fidelity)': {
+        'pkl':        'models/fashion_recommender_vgg16.pkl',
+        'extractor':  'vgg16',
+        'feat_dim':   '4096-D',
         'gdrive_key': 'vgg16_pkl',
+        'desc':       'Highest feature depth, most memory',
+        'size':       '~701 MB',
     },
 }
 
 # ─── Load model + merge styles.csv ────────────────────────────────────────────
 @st.cache_resource
-def load_model(model_name: str = 'ResNet50 (default)'):
+def load_model(model_name: str = 'ResNet-50 (Recommended)'):
     cfg      = MODEL_OPTIONS[model_name]
     pkl_path = cfg['pkl']
 
@@ -695,7 +702,7 @@ def main():
 
     setup_dataset()
 
-    # ── Model selector (sidebar, default = ResNet50) ───────────────────────────
+    # ── Navigation (sidebar) ────────────────────────────────────────────────────
     st.sidebar.markdown("""
     <div style="font-family:'Cormorant Garamond',serif;font-style:italic;
                 font-size:1.4rem;color:#d4af6b;margin-bottom:1rem;">Navigation</div>
@@ -704,26 +711,43 @@ def main():
                             label_visibility="collapsed")
     st.sidebar.markdown('<hr style="border-color:#1e1c18;margin:1.5rem 0">', unsafe_allow_html=True)
 
+    # ── Model selector dropdown (default = ResNet-50) ─────────────────────────
     st.sidebar.markdown("""
     <div style="font-size:.65rem;color:#6a6058;letter-spacing:2px;text-transform:uppercase;
-                margin-bottom:.4rem;">Select Model</div>
+                margin-bottom:.4rem;">⚙ Select Model</div>
     """, unsafe_allow_html=True)
-    model_choice = st.sidebar.radio(
-        "model_select",
-        list(MODEL_OPTIONS.keys()),
-        index=0,          # ResNet50 (default) is first
-        label_visibility="collapsed",
+    model_names = list(MODEL_OPTIONS.keys())
+    model_choice = st.sidebar.selectbox(
+        "Choose a backbone model",
+        model_names,
+        index=0,   # ResNet-50 (Recommended) is first / default
+        help="Select the deep learning model for feature extraction. ResNet-50 offers the best accuracy-speed trade-off.",
     )
+
+    # Show selected model info card
+    cfg = MODEL_OPTIONS[model_choice]
+    st.sidebar.markdown(f"""
+    <div style="background:rgba(212,175,107,0.06); border:1px solid rgba(212,175,107,0.15);
+                border-radius:4px; padding:0.8rem 1rem; margin:0.6rem 0 0.3rem 0;">
+        <div style="font-size:.72rem;color:#d4af6b;font-weight:500;margin-bottom:4px;">
+            {model_choice.split(' (')[0]}</div>
+        <div style="font-size:.68rem;color:#8a7f72;line-height:1.7;">
+            {cfg['desc']}<br>
+            Features: <span style="color:#d4af6b">{cfg['feat_dim']}</span> · 
+            Size: <span style="color:#d4af6b">{cfg['size']}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     recommender, extractor, metadata, features = load_model(model_choice)
 
     st.sidebar.markdown('<hr style="border-color:#1e1c18;margin:1.5rem 0">', unsafe_allow_html=True)
     has_labels = 'masterCategory' in metadata.columns
-    cfg = MODEL_OPTIONS[model_choice]
+    backbone_name = model_choice.split(' (')[0]
     st.sidebar.markdown(f"""
     <div style="font-size:.7rem;color:#3a3530;letter-spacing:1px;line-height:2.2">
     DATASET &nbsp;·&nbsp; Myntra<br>
-    BACKBONE &nbsp;·&nbsp; {model_choice.replace(' (default)', '')}<br>
+    BACKBONE &nbsp;·&nbsp; {backbone_name}<br>
     ITEMS &nbsp;·&nbsp; {len(metadata):,}<br>
     FEATURES &nbsp;·&nbsp; {cfg['feat_dim']}<br>
     LABELS &nbsp;·&nbsp; {'Real ✦' if has_labels else 'KMeans'}
