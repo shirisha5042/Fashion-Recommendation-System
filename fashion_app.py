@@ -593,6 +593,15 @@ def analytics_dashboard(meta, rec, features):
             axes[1].set_facecolor(CARD_BG)
             axes[1].set_title('Category Share', color=GOLD_LIGHT, fontsize=11,
                               fontfamily='serif', fontstyle='italic')
+
+            # Use legend instead of inline labels to avoid overlap
+            axes[1].legend(wedges, [f'{l} ({v:,})' for l, v in zip(cat_counts.index, cat_counts.values)],
+                           loc='center left', bbox_to_anchor=(1.05, 0.5),
+                           facecolor=CARD_BG, labelcolor=GOLD_LIGHT, fontsize=7,
+                           edgecolor=MUTED, framealpha=0.9)
+            # Hide the inline labels that overlap
+            for t in texts: t.set_text('')
+
             fig.tight_layout(pad=2); st.pyplot(fig, use_container_width=True); plt.close()
 
             st.markdown("---")
@@ -615,25 +624,40 @@ def analytics_dashboard(meta, rec, features):
 
             # ── Gender + Season + Usage ──────────────────────────────────────
             st.markdown('<div class="section-title" style="font-size:1.3rem">Gender · Season · Usage</div><div class="section-rule"></div>', unsafe_allow_html=True)
-            fig, axes = plt.subplots(1, 3, figsize=(16, 5)); style_fig(fig)
 
-            for ax, col_, title in zip(axes,
+            chart_cols = st.columns(3)
+            for ci, (col_, title) in enumerate(zip(
                 ['gender','season','usage'],
-                ['Gender Distribution','Season Distribution','Usage Distribution']):
+                ['Gender Distribution','Season Distribution','Usage Distribution'])):
                 if col_ not in meta.columns: continue
                 vc = meta[col_].value_counts().dropna()
-                wedge_c = [MULTI_COLORS[i % len(MULTI_COLORS)] for i in range(len(vc))]
+
+                # Group tiny slices (<2%) into "Other"
+                threshold = vc.sum() * 0.02
+                main = vc[vc >= threshold]
+                other_sum = vc[vc < threshold].sum()
+                if other_sum > 0:
+                    main = pd.concat([main, pd.Series({'Other': other_sum})])
+
+                wedge_c = [MULTI_COLORS[i % len(MULTI_COLORS)] for i in range(len(main))]
+                fig, ax = plt.subplots(figsize=(6, 5)); style_fig(fig)
                 wedges, texts, autotexts = ax.pie(
-                    vc.values, labels=vc.index, colors=wedge_c,
-                    autopct='%1.1f%%', pctdistance=.78, startangle=90,
+                    main.values, labels=None, colors=wedge_c,
+                    autopct='%1.1f%%', pctdistance=.82, startangle=90,
                     wedgeprops=dict(width=.5, edgecolor=OBSIDIAN, linewidth=1.2)
                 )
-                for t in texts:    t.set_color(GOLD_LIGHT); t.set_fontsize(8)
-                for at in autotexts: at.set_color(OBSIDIAN); at.set_fontsize(7); at.set_fontweight('bold')
+                for at in autotexts: at.set_color(GOLD_LIGHT); at.set_fontsize(8); at.set_fontweight('bold')
                 ax.set_facecolor(CARD_BG)
                 ax.set_title(title, color=GOLD_LIGHT, fontsize=11,
-                             fontfamily='serif', fontstyle='italic')
-            fig.tight_layout(pad=2); st.pyplot(fig, use_container_width=True); plt.close()
+                             fontfamily='serif', fontstyle='italic', pad=12)
+                ax.legend(wedges, [f'{l}  ({v:,})' for l, v in zip(main.index, main.values)],
+                          loc='upper center', bbox_to_anchor=(0.5, -0.02), ncol=2,
+                          facecolor=CARD_BG, labelcolor=GOLD_LIGHT, fontsize=8,
+                          edgecolor=MUTED, framealpha=0.9)
+                fig.tight_layout(pad=1.5)
+                with chart_cols[ci]:
+                    st.pyplot(fig, use_container_width=True)
+                plt.close()
 
             st.markdown("---")
 
