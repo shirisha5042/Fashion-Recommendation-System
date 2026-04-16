@@ -308,12 +308,28 @@ def setup_dataset():
             st.info("For cloud deployment, set the `GDRIVE_DATASET_ID` secret in Streamlit Cloud settings.")
             st.stop()
 
+    # Handle nested extraction: if zip created myntradataset/myntradataset/
+    nested = os.path.join(folder, "myntradataset")
+    if os.path.isdir(nested) and not os.path.exists(os.path.join(folder, "images")):
+        import shutil
+        for item in os.listdir(nested):
+            src = os.path.join(nested, item)
+            dst = os.path.join(folder, item)
+            if not os.path.exists(dst):
+                shutil.move(src, dst)
+        shutil.rmtree(nested, ignore_errors=True)
+
     if not os.path.exists(f"{folder}/images"):
         st.error("'images' folder missing inside myntradataset.")
         st.stop()
 
     if not os.path.exists(f"{folder}/styles.csv"):
         st.warning("styles.csv not found (labels may be missing)")
+
+    # Log image count for debugging
+    img_dir = os.path.join(folder, "images")
+    img_count = len([f for f in os.listdir(img_dir) if f.endswith(('.jpg','.jpeg','.png'))])
+    st.sidebar.caption(f"📸 {img_count:,} images found on disk")
 
     return folder
 
@@ -412,7 +428,12 @@ def load_model(model_name: str = 'ResNet-50 (Recommended)'):
     if features.dtype != np.float32:
         features = features.astype(np.float32)
     if 'image_path' in metadata.columns:
-        metadata['image_path'] = metadata['image_path'].str.replace('\\','/',regex=False)
+        # Normalize paths: strip Colab prefix (/content/my_dataset/) and Windows backslashes
+        metadata['image_path'] = (
+            metadata['image_path']
+            .str.replace('\\', '/', regex=False)
+            .str.replace(r'^.*/myntradataset/', 'myntradataset/', regex=True)
+        )
 
     # ── Merge styles.csv for real labels ──────────────────────────────────────
     styles_path = 'myntradataset/styles.csv'
