@@ -406,8 +406,12 @@ MODEL_OPTIONS = {
 }
 
 # ─── Load model + merge styles.csv ────────────────────────────────────────────
-@st.cache_resource
+# NOTE: Not cached with @st.cache_resource to allow model switching without OOM
+#       on Streamlit Cloud free tier (1GB RAM). Only one model stays in memory.
 def load_model(model_name: str = 'ResNet-50 (Recommended)'):
+    import gc
+    gc.collect()  # Free memory from previous model
+
     cfg      = MODEL_OPTIONS[model_name]
     pkl_path = cfg['pkl']
 
@@ -417,35 +421,45 @@ def load_model(model_name: str = 'ResNet-50 (Recommended)'):
         gdrive_key = cfg.get('gdrive_key', '')
         file_id = GDRIVE_FILES.get(gdrive_key, '')
         if file_id:
-            download_from_gdrive(file_id, pkl_path)
+            with st.spinner(f'Downloading {model_name}... (first time only)'):
+                download_from_gdrive(file_id, pkl_path)
         if not os.path.exists(pkl_path):
-            st.error(f"Model file not found: {pkl_path}\nPlease run the notebook to generate the .pkl file, or set the Google Drive secret.")
+            st.error(f"Model file not found: {pkl_path}\nPlease set the correct Google Drive secret.")
             st.stop()
 
-    data     = joblib.load(pkl_path)
-    features = data['features']
-    metadata = data['metadata']
-    if features.dtype != np.float32:
-        features = features.astype(np.float32)
-    if 'image_path' in metadata.columns:
-        # Normalize paths: strip Colab prefix (/content/my_dataset/) and Windows backslashes
-        metadata['image_path'] = (
-            metadata['image_path']
-            .str.replace('\\', '/', regex=False)
-            .str.replace(r'^.*/myntradataset/', 'myntradataset/', regex=True)
-        )
+    try:
+        with st.spinner(f'Loading {model_name}...'):
+            data     = joblib.load(pkl_path)
+            features = data['features']
+            metadata = data['metadata']
+            del data  # Free the raw dict
+            gc.collect()
 
-    # ── Merge styles.csv for real labels (only if not already in pkl) ───────────
-    if 'productDisplayName' not in metadata.columns:
-        styles_path = 'myntradataset/styles.csv'
-        if os.path.exists(styles_path):
-            styles = pd.read_csv(styles_path, on_bad_lines='skip')
-            styles['id'] = styles['id'].astype(str)
-            metadata['image_id'] = metadata['image_id'].astype(str)
-            metadata = metadata.merge(styles, left_on='image_id', right_on='id', how='left')
+            if features.dtype != np.float32:
+                features = features.astype(np.float32)
+            if 'image_path' in metadata.columns:
+                # Normalize paths: strip Colab prefix (/content/my_dataset/) and Windows backslashes
+                metadata['image_path'] = (
+                    metadata['image_path']
+                    .str.replace('\\', '/', regex=False)
+                    .str.replace(r'^.*/myntradataset/', 'myntradataset/', regex=True)
+                )
 
-    extractor_type = cfg['extractor']
-    return FashionRecommender(features, metadata), FeatureExtractor(extractor_type), metadata, features
+            # ── Merge styles.csv for real labels (only if not already in pkl) ─────
+            if 'productDisplayName' not in metadata.columns:
+                styles_path = 'myntradataset/styles.csv'
+                if os.path.exists(styles_path):
+                    styles = pd.read_csv(styles_path, on_bad_lines='skip')
+                    styles['id'] = styles['id'].astype(str)
+                    metadata['image_id'] = metadata['image_id'].astype(str)
+                    metadata = metadata.merge(styles, left_on='image_id', right_on='id', how='left')
+
+            extractor_type = cfg['extractor']
+            return FashionRecommender(features, metadata), FeatureExtractor(extractor_type), metadata, features
+    except Exception as e:
+        st.error(f"Failed to load {model_name}: {str(e)}")
+        st.info("This model may be too large for the free tier, or the file may be corrupted. Try a different model.")
+        st.stop()
 
 # ═════════════════════════════════════════════════════════════════════════════
 #   BROWSE MODE
@@ -461,7 +475,7 @@ def browse_catalog_mode(rec, meta):
     for i,(_, item) in enumerate(st.session_state.sample.iterrows()):
         with cols[i%5]:
             try:
-                st.image(Image.open(item['image_path']), use_container_width=True)
+                st.image(Image.open(item['image_path']), width='stretch')
                 name = item.get('productDisplayName', item['filename'])
                 st.caption(str(name)[:30] if pd.notna(name) else item['filename'][:25])
                 if st.button("Select", key=f"s{i}"): sel = item.name
@@ -472,7 +486,7 @@ def browse_catalog_mode(rec, meta):
         c1,c2 = st.columns([1,2])
         with c1:
             st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b;font-size:1rem">Query Item</p>', unsafe_allow_html=True)
-            try: st.image(Image.open(q['image_path']), use_container_width=True)
+            try: st.image(Image.open(q['image_path']), width='stretch')
             except: pass
             if 'productDisplayName' in q and pd.notna(q['productDisplayName']):
                 st.markdown(f'<p style="font-size:.8rem;color:#a89880">{q["productDisplayName"]}</p>', unsafe_allow_html=True)
@@ -486,7 +500,7 @@ def browse_catalog_mode(rec, meta):
             for i,(_, r) in enumerate(recs.iterrows()):
                 with rc[i%3]:
                     try:
-                        st.image(Image.open(r['image_path']), use_container_width=True)
+                        st.image(Image.open(r['image_path']), width='stretch')
                         score = r['similarity_score']
                         color = '#7ecba1' if score>.85 else ('#d4af6b' if score>.7 else '#e07070')
                         st.markdown(f'<p style="color:{color};font-size:.8rem;font-weight:600;text-align:center;margin:0">{score:.1%}</p>', unsafe_allow_html=True)
@@ -506,7 +520,7 @@ def upload_image_mode(rec, ext, meta):
         c1,c2 = st.columns([1,2])
         with c1:
             st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b">Your Image</p>', unsafe_allow_html=True)
-            st.image(img, use_container_width=True)
+            st.image(img, width='stretch')
         with c2:
             st.markdown('<p style="font-family:serif;font-style:italic;color:#d4af6b">Closest Matches</p>', unsafe_allow_html=True)
             n = st.slider("Results", 3, 12, 6)
@@ -517,7 +531,7 @@ def upload_image_mode(rec, ext, meta):
             for i,(_, r) in enumerate(recs.iterrows()):
                 with rc[i%3]:
                     try:
-                        st.image(Image.open(r['image_path']), use_container_width=True)
+                        st.image(Image.open(r['image_path']), width='stretch')
                         st.markdown(f'<p style="color:#d4af6b;font-size:.8rem;text-align:center;margin:0">{r["similarity_score"]:.1%}</p>', unsafe_allow_html=True)
                         if 'productDisplayName' in r and pd.notna(r.get('productDisplayName',None)):
                             st.caption(str(r['productDisplayName'])[:28])
@@ -602,7 +616,7 @@ def analytics_dashboard(meta, rec, features):
             # Hide the inline labels that overlap
             for t in texts: t.set_text('')
 
-            fig.tight_layout(pad=2); st.pyplot(fig, use_container_width=True); plt.close()
+            fig.tight_layout(pad=2); st.pyplot(fig, width='stretch'); plt.close()
 
             st.markdown("---")
 
@@ -618,7 +632,7 @@ def analytics_dashboard(meta, rec, features):
                         ha='center', va='bottom', color=GOLD_LIGHT, fontsize=7.5)
             ax.set_xticklabels(art_counts.index, rotation=35, ha='right', fontsize=8)
             style_ax(ax, 'Top 15 Article Types by Count', '', 'Count')
-            fig.tight_layout(); st.pyplot(fig, use_container_width=True); plt.close()
+            fig.tight_layout(); st.pyplot(fig, width='stretch'); plt.close()
 
             st.markdown("---")
 
@@ -656,7 +670,7 @@ def analytics_dashboard(meta, rec, features):
                           edgecolor=MUTED, framealpha=0.9)
                 fig.tight_layout(pad=1.5)
                 with chart_cols[ci]:
-                    st.pyplot(fig, use_container_width=True)
+                    st.pyplot(fig, width='stretch')
                 plt.close()
 
             st.markdown("---")
@@ -684,7 +698,7 @@ def analytics_dashboard(meta, rec, features):
                         ha='center', va='bottom', color=GOLD_LIGHT, fontsize=7.5)
             ax.set_xticklabels(colour_counts.index, rotation=35, ha='right', fontsize=8)
             style_ax(ax, 'Top 20 Colours in Dataset', '', 'Count')
-            fig.tight_layout(); st.pyplot(fig, use_container_width=True); plt.close()
+            fig.tight_layout(); st.pyplot(fig, width='stretch'); plt.close()
 
             st.markdown("---")
 
@@ -696,7 +710,7 @@ def analytics_dashboard(meta, rec, features):
                 ax.plot(year_counts.index, year_counts.values, color=GOLD, lw=2.5, zorder=3, marker='o', markersize=5)
                 ax.fill_between(year_counts.index, year_counts.values, alpha=.12, color=GOLD)
                 style_ax(ax, 'Dataset Growth by Year', 'Year', 'Number of Items')
-                fig.tight_layout(); st.pyplot(fig, use_container_width=True); plt.close()
+                fig.tight_layout(); st.pyplot(fig, width='stretch'); plt.close()
 
         # ── PCA ──────────────────────────────────────────────────────────────
         st.markdown("---")
@@ -727,7 +741,7 @@ def analytics_dashboard(meta, rec, features):
         var = pca.explained_variance_ratio_
         style_ax(ax, f'ResNet18 Embeddings — PC1 {var[0]:.1%}  ·  PC2 {var[1]:.1%}  ·  {ps:,} items',
                  'Principal Component 1', 'Principal Component 2')
-        fig.tight_layout(); st.pyplot(fig, use_container_width=True); plt.close()
+        fig.tight_layout(); st.pyplot(fig, width='stretch'); plt.close()
 
         st.markdown(f"""<div class="insight">
         Each color represents a <b>master category</b>. Visible clustering confirms the model
